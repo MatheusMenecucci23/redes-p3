@@ -11,6 +11,7 @@ class IP:
         """
         self.callback = None
         self.enlace = enlace
+        self.id = 0
         self.enlace.registrar_recebedor(self.__raw_recv)
         self.ignore_checksum = self.enlace.ignore_checksum
         self.meu_endereco = None
@@ -29,25 +30,35 @@ class IP:
             # atua como roteador
             next_hop = self._next_hop(dst_addr)
 
-            # Decrementar o TTL antes de encaminhar o datagrama
-            ttl -= 1
+            if ttl ==  1:
+                checksum  =  calc_checksum(struct.pack(
+                    '!BBHI', 11, 0, 0, 0) + datagrama[:28])
 
-            if ttl <= 0:
-                # Descartar o datagrama se o TTL chegar a zero
-                
+                self.enviar(struct.pack(
+                    '!BBHI', 11, 0, checksum, 0) + datagrama[:28], src_addr, IPPROTO_ICMP)
                 return
-
+                
             # Corrigir o checksum do cabeçalho IP após decrementar o TTL
-            header = struct.pack('!BBHHHBBH4s4s', (4 << 4) | 5, dscp << 2 | ecn, 
-                                 len(datagrama), identification, 
-                                 (flags << 13) | frag_offset, ttl, proto, 0, 
-                                 str2addr(src_addr), str2addr(dst_addr))
+            header =  struct.pack('!BBHHHBBH', 0x45, dscp | ecn, 20+len(payload), identification,
+                                 (flags << 13) | frag_offset, ttl-1, proto, 0)
+            dest  = str2addr(dst_addr)
+
+
+            end =  str2addr(src_addr)
+            header +=  end + dest
+
+
+            checksum  = calc_checksum(header)
+
+
+            header =  struct.pack('!BBHHHBBH', 0x45, dscp | ecn, 20+len(payload), identification,
+                                 (flags << 13) | frag_offset, ttl-1, proto, checksum)
+
+            dest  = str2addr(dst_addr)
+            end =  str2addr(src_addr)
             
-            checksum = calc_checksum(header)
-            header = struct.pack('!BBHHHBBH4s4s', (4 << 4) | 5, dscp << 2 | ecn, 
-                                 len(datagrama), identification, 
-                                 (flags << 13) | frag_offset, ttl, proto, checksum, 
-                                 str2addr(src_addr), str2addr(dst_addr))
+            
+            header +=  end +  dest
 
             # Encaminhar o datagrama para o próximo roteador
             self.enlace.enviar(header + payload, next_hop)
@@ -100,7 +111,7 @@ class IP:
         """
         self.callback = callback
 
-    def enviar(self, segmento, dest_addr):
+    def enviar(self, segmento, dest_addr, protocol=IPPROTO_TCP):
         """
         Envia segmento para dest_addr, onde dest_addr é um endereço IPv4
         (string no formato x.y.z.w).
@@ -124,19 +135,20 @@ class IP:
         dst_addr_bytes = str2addr(dst_addr)
 
         # Montando o cabeçalho IP em formato de bytes
-        header = struct.pack('!BBHHHBBH4s4s', version_ihl, dscp_ecn, total_length,
-                             identification, flags_offset, ttl, proto, header_checksum,
-                             src_addr_bytes, dst_addr_bytes)
+        header =  struct.pack('!BBHHHBBH', ((4 << 4) | 5), 0, (20 + len(segmento)), self.id,
+                             0, 64, protocol, 0)
 
-        # Calculando o checksum do cabeçalho IP
-        if not self.ignore_checksum:
-            header_checksum = calc_checksum(header)
-            header = struct.pack('!BBHHHBBH4s4s', version_ihl, dscp_ecn, total_length,
-                                 identification, flags_offset, ttl, proto, header_checksum,
-                                 src_addr_bytes, dst_addr_bytes)
+        dest  = str2addr(dest_addr)
+        end =  str2addr(self.meu_endereco)
+        
 
-        # Montando o datagrama completo com o cabeçalho IP e o payload (segmento)
-        datagrama = header + segmento
+        header +=  end + dest
 
-        # Enviando o datagrama através da camada de enlace
-        self.enlace.enviar(datagrama, next_hop)
+        header  =   struct.pack('!BBHHHBBH', ((4 << 4) | 5), 0, (20 + len(segmento)), self.id, 0, 64,
+                             protocol, calc_checksum(header))
+        end =  str2addr(self.meu_endereco)
+        dest  = str2addr(dest_addr)
+
+        header +=  end + dest
+        self.id  += 1
+        self.enlace.enviar(header + segmento, next_hop)
